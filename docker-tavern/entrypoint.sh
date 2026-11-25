@@ -106,9 +106,10 @@ ensure_trust_row() {
   fi
 }
 
-# The last address the service printed, with its login token.
+# The last address the service printed, with its login token. It prints other
+# lines that begin the same way.
 printed_url() {
-  grep -a '^dsh web: ' "$log" 2>/dev/null | tail -n 1 | cut -d ' ' -f 3 || true
+  grep -a '^dsh web: http' "$log" 2>/dev/null | tail -n 1 | cut -d ' ' -f 3 || true
 }
 
 announce() {

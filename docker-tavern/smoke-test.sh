@@ -114,6 +114,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker image ls "$image" --format 'size of the image: {{.Size}}'
+docker history --format '{{.Size}}\t{{.CreatedBy}}' "$image" | cut -c 1-110
 docker run --rm --entrypoint cat "$image" /opt/dsh-tavern/seed.json
 
 step 'An address that is not one is refused before anything is unpacked'
@@ -142,7 +143,8 @@ sudo du -sm "$data"
 step 'Nobody gets in without the token; with it, the page is the tavern'
 expect 'without the token' 401 "$(code "$base/")"
 login "$fresh"
-expect 'the page, with the cookie' 200 "$(code -H "Cookie: $session" -o "$work/page.html" "$base/")"
+expect 'the page, with the cookie' 200 "$(code -H "Cookie: $session" "$base/")"
+curl -s -m 10 -H "Cookie: $session" -o "$work/page.html" "$base/"
 grep -qi '<html' "$work/page.html" || fail 'the page is not HTML'
 { grep -o 'dsh-tavern[a-z-]*' "$work/page.html" | sort | uniq -c | sort -rn; } > "$work/mentions.txt" || true
 head -n 8 "$work/mentions.txt"
