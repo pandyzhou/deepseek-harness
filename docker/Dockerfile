@@ -12,8 +12,11 @@ RUN apt-get update \
         ca-certificates curl git jq less openssh-client procps python3 ripgrep tini unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# npm links /usr/local/bin/dsh to the package's bin.js; the link goes, so
+# that the wrapper copied below takes its place and not bin.js's.
 RUN npm install --global "@deepseek-ai/dsh@${DSH_VERSION}" \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && rm /usr/local/bin/dsh
 
 COPY entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY dsh /usr/local/bin/dsh
