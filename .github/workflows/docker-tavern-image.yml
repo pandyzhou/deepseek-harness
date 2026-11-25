@@ -1,5 +1,6 @@
 name: Docker image (tavern)
 
+# The commit of dsh-tavern that is built is the one in docker-tavern/TAVERN_COMMIT.
 on:
   push:
     branches: [master]
@@ -8,11 +9,6 @@ on:
       - '!docker-tavern/**.md'
       - .github/workflows/docker-tavern-image.yml
   workflow_dispatch:
-    inputs:
-      commit:
-        description: The commit of flizzywine/dsh-tavern to build, in full; the head of its main when empty
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -26,7 +22,7 @@ jobs:
   build:
     if: github.repository == 'pandyzhou/deepseek-harness'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       IMAGE: ghcr.io/pandyzhou/dsh-tavern
       TAVERN_REPOSITORY: flizzywine/dsh-tavern
@@ -35,22 +31,6 @@ jobs:
         with:
           sparse-checkout: docker-tavern
 
-      - name: Choose the commit
-        id: commit
-        env:
-          ASKED: ${{ inputs.commit }}
-        run: |
-          commit="$ASKED"
-          if [ -z "$commit" ]; then
-            commit="$(git ls-remote "https://github.com/$TAVERN_REPOSITORY.git" refs/heads/main | cut -f1)"
-          fi
-          if ! printf '%s' "$commit" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "Not a full commit id: $commit"
-            exit 1
-          fi
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "Building $TAVERN_REPOSITORY at $commit"
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Build
@@ -58,46 +38,44 @@ jobs:
         with:
           context: docker-tavern
           load: true
-          build-args: |
-            TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
-            TAVERN_COMMIT=${{ steps.commit.outputs.commit }}
+          build-args: TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
           tags: ${{ env.IMAGE }}:test
           cache-from: type=gha,scope=tavern
           cache-to: type=gha,mode=max,scope=tavern
 
       - name: Read what the image carries
         id: seed
-        env:
-          COMMIT: ${{ steps.commit.outputs.commit }}
         run: |
           docker run --rm --entrypoint cat "$IMAGE:test" /opt/dsh-tavern/seed.json > seed.json
           cat seed.json
-          test "$(jq -r .commit seed.json)" = "$COMMIT"
+          commit="$(jq -r .commit seed.json)"
+          test "$commit" = "$(tr -d '[:space:]' < docker-tavern/TAVERN_COMMIT)"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$(jq -r .version seed.json)" >> "$GITHUB_OUTPUT"
           echo "dsh=$(jq -r .dsh seed.json)" >> "$GITHUB_OUTPUT"
-          echo "tag=$(jq -r .version seed.json)-$(printf '%s' "$COMMIT" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(jq -r .version seed.json)-$(printf '%s' "$commit" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      # For the picture of the first screen: Chinese fonts, and a driver for
-      # the Chrome that the runner has.
+      # For the browser that the test logs in with: Chinese fonts, and a
+      # driver for the Chrome that the runner has.
       - name: Prepare the browser
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends fonts-noto-cjk
           npm install --prefix "$RUNNER_TEMP/browser" --no-audit --no-fund playwright-core
           echo "NODE_PATH=$RUNNER_TEMP/browser/node_modules" >> "$GITHUB_ENV"
-          echo "SMOKE_PICTURES=$RUNNER_TEMP/first-screen" >> "$GITHUB_ENV"
+          echo "SMOKE_PICTURES=$RUNNER_TEMP/pictures" >> "$GITHUB_ENV"
 
       - name: Run it the way it is deployed
         env:
-          COMMIT: ${{ steps.commit.outputs.commit }}
+          COMMIT: ${{ steps.seed.outputs.commit }}
         run: bash docker-tavern/smoke-test.sh "$IMAGE:test" "$TAVERN_REPOSITORY" "$COMMIT"
 
-      - name: Keep the picture of the first screen
+      - name: Keep the pictures of the login page and the first screen
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: first-screen
-          path: ${{ runner.temp }}/first-screen
+          name: pictures
+          path: ${{ runner.temp }}/pictures
           if-no-files-found: ignore
 
       - uses: docker/login-action@v3
@@ -111,13 +89,11 @@ jobs:
         with:
           context: docker-tavern
           push: true
-          build-args: |
-            TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
-            TAVERN_COMMIT=${{ steps.commit.outputs.commit }}
+          build-args: TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.seed.outputs.tag }}
             ${{ env.IMAGE }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/pandyzhou/deepseek-harness
-            org.opencontainers.image.description=DSH Tavern ${{ steps.seed.outputs.version }} (flizzywine/dsh-tavern at ${{ steps.commit.outputs.commit }}, AGPL-3.0) with DeepSeek Harness ${{ steps.seed.outputs.dsh }} (MIT)
+            org.opencontainers.image.description=DSH Tavern ${{ steps.seed.outputs.version }} (flizzywine/dsh-tavern at ${{ steps.seed.outputs.commit }}, AGPL-3.0) with DeepSeek Harness ${{ steps.seed.outputs.dsh }} (MIT)
           cache-from: type=gha,scope=tavern

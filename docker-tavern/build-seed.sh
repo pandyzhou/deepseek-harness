@@ -1,11 +1,13 @@
 #!/bin/bash
 # Runs once while the image is built, as the user node. Installs dsh-tavern at
-# /data with the project's own installer, at exactly TAVERN_COMMIT, and packs
-# the result into the archive that the first start of a container unpacks.
+# /data with the project's own installer, at exactly the commit in the file
+# TAVERN_COMMIT, and packs the result into the archive that the first start of
+# a container unpacks.
 set -euo pipefail
 . /usr/local/lib/dsh-tavern-docker/paths.sh
 
 : "${TAVERN_REPOSITORY:?}"
+TAVERN_COMMIT=$(tr -d '[:space:]' < /usr/local/lib/dsh-tavern-docker/TAVERN_COMMIT)
 case "${TAVERN_COMMIT:-}" in
   *[!0-9a-f]* | '') echo "TAVERN_COMMIT is not a full commit id: ${TAVERN_COMMIT:-}" >&2; exit 1 ;;
 esac
@@ -54,7 +56,9 @@ kilobytes=$(du -sk /data | cut -f1)
 
 # Sorted, so that of the files the package store shares with the installed
 # packages the installed one is stored and the store's one is a link to it.
-tar --sort=name -C /data -cf - dsh-tavern home | zstd -q -T0 -19 -o "$SEED"
+# The long window finds the packages that are there more than once; a higher
+# level takes minutes for a few megabytes less.
+tar --sort=name -C /data -cf - dsh-tavern home | zstd -q -T0 -12 --long=27 -o "$SEED"
 printf '{"commit":"%s","version":"%s","dsh":"%s","kilobytes":%s}\n' \
   "$TAVERN_COMMIT" "$version" "$dsh" "$kilobytes" > "$SEED_INFO"
 echo "Packed $((kilobytes / 1024)) MB into $(du -m "$SEED" | cut -f1) MB: $(cat "$SEED_INFO")"
