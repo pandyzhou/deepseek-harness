@@ -1,0 +1,101 @@
+name: Docker image
+
+on:
+  push:
+    branches: [docker]
+    paths:
+      - docker/**
+      - .github/workflows/docker-image.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version of @deepseek-ai/dsh to build; npm's latest when empty
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'pandyzhou/deepseek-harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/pandyzhou/dsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docker
+
+      - name: Choose the version
+        id: version
+        env:
+          ASKED: ${{ inputs.version }}
+        run: |
+          version="$ASKED"
+          if [ -z "$version" ]; then
+            version="$(npm view @deepseek-ai/dsh version)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building @deepseek-ai/dsh $version"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          load: true
+          build-args: DSH_VERSION=${{ steps.version.outputs.version }}
+          tags: ${{ env.IMAGE }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check that the Web UI answers
+        run: |
+          docker image ls "$IMAGE:test" --format 'size: {{.Size}}'
+          docker run --rm "$IMAGE:test" --help | head -5
+          docker run -d --name dsh -p 127.0.0.1:13080:3080 \
+            -e DSH_TRUSTED_HOSTS=127.0.0.1:13080 "$IMAGE:test"
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:13080/; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          docker logs dsh 2>&1 | tail -40
+          docker top dsh
+          test "${ok:-}" = 1
+          # Not as root, and healthy by the image's own check.
+          who="$(docker exec dsh sh -c 'ps -o user= -C node | sort -u | xargs')"
+          echo "dsh runs as: $who"
+          test "$who" = node
+          docker exec dsh dsh-healthcheck
+          docker rm -f dsh
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          push: true
+          build-args: DSH_VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/pandyzhou/deepseek-harness
+            org.opencontainers.image.description=DeepSeek Harness (dsh) ${{ steps.version.outputs.version }}, one process, plain HTTP
+          cache-from: type=gha

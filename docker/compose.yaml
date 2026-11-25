@@ -1,0 +1,15 @@
+# An example. Put a reverse proxy that asks for a login in front of
+# 127.0.0.1:10443 (plain HTTP); the container itself asks for none.
+services:
+  dsh:
+    image: ghcr.io/pandyzhou/dsh:latest
+    container_name: dsh
+    restart: unless-stopped
+    environment:
+      DSH_TRUSTED_HOSTS: dsh.example.com
+      DSH_PUBLIC_URL: https://dsh.example.com/
+    ports:
+      - "127.0.0.1:10443:3080"
+    volumes:
+      - ./data/dsh:/data/dsh
+      - ./data/workspace:/workspace

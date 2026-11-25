@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs dsh as the user node, with its home under /data/dsh, whoever calls it.
+set -eu
+
+export HOME=/data/dsh/home
+export DSH_HOME=/data/dsh
+
+bin=/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js
+if [ "$(id -u)" -eq 0 ]; then
+  exec setpriv --reuid node --regid node --init-groups node --expose-internals "$bin" "$@"
+fi
+exec node --expose-internals "$bin" "$@"
