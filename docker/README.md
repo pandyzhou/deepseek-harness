@@ -1,6 +1,6 @@
 # dsh 的 Docker 镜像
 
-这个分支（`docker`）在上游代码之外只多了 `docker/` 目录和一个构建流程，用来把
+这个 fork 在上游代码之外只多了 `docker/` 目录和一个构建流程，用来把
 官方发布的 npm 包 `@deepseek-ai/dsh` 做成镜像 `ghcr.io/pandyzhou/dsh`。
 
 和 1Panel 应用商店里的镜像相比：
