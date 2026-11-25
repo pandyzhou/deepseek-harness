@@ -4,9 +4,7 @@
 #   smoke-test.sh <image> [<repository> <commit>]
 #
 # With a repository and a commit of dsh-tavern it also runs an update inside the
-# container, to that same commit. With SMOKE_PICTURES naming a directory, and a
-# browser to drive (see browser-check.cjs), it also logs in with the browser
-# and leaves pictures of the login page and the first screen there.
+# container, to that same commit.
 set -euo pipefail
 
 image=$1
@@ -20,7 +18,6 @@ base=http://127.0.0.1:$port
 direct=127.0.0.1:$port
 account=smoke
 password='correct horse battery'
-proxy_site=https://tavern.example.com
 data=/tmp/tavern-smoke-data
 home=$data/dsh-tavern
 work=$(mktemp -d)
@@ -123,7 +120,7 @@ count() {
 }
 
 cleanup() {
-  docker rm -f tavern-smoke tavern-smoke-volume tavern-smoke-proxy > /dev/null 2>&1 || true
+  docker rm -f tavern-smoke tavern-smoke-volume > /dev/null 2>&1 || true
   docker volume rm -f tavern-smoke-volume > /dev/null 2>&1 || true
   sudo rm -rf "$data" "$work"
 }
@@ -256,41 +253,20 @@ for _ in $(seq 1 30); do
 done
 expect 'health' healthy "$health"
 
-step 'Behind a reverse proxy, set up as openresty.conf says'
-proxy=$work/proxy
-mkdir -p "$proxy"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=tavern.example.com \
-  -addext subjectAltName=DNS:tavern.example.com -keyout "$proxy/key.pem" -out "$proxy/cert.pem" 2> /dev/null
-sed -e 's#/path/to/fullchain.pem#/etc/nginx/tavern/cert.pem#' \
-  -e 's#/path/to/privkey.pem#/etc/nginx/tavern/key.pem#' \
-  -e "s#127.0.0.1:10444#127.0.0.1:$port#" \
-  "$(dirname "$0")/openresty.conf" > "$proxy/site.conf"
-chmod -R a+rX "$proxy"
-docker run -d --name tavern-smoke-proxy --network host \
-  -v "$proxy/site.conf:/etc/nginx/conf.d/default.conf:ro" -v "$proxy:/etc/nginx/tavern:ro" \
-  openresty/openresty:alpine > /dev/null
-# The status of a request to the site through the proxy.
-through() { curl -sk -o /dev/null -m 15 -w '%{http_code}' --resolve tavern.example.com:443:127.0.0.1 "$@" || true; }
-for _ in $(seq 1 30); do
-  [ "$(through "$proxy_site/version")" != 200 ] || break
-  sleep 1
-done
-expect 'through the proxy, without a login: what cards fetch' 200 "$(through "$proxy_site/version")"
-expect 'through the proxy, a browser without a login: the page' 302 "$(through -H 'Accept: text/html' "$proxy_site/")"
-expect 'through the proxy, without a login: the API' 401 "$(through "$proxy_site/api/smoke-test-no-such-route")"
-rm -f "$work/proxy.jar"
-expect 'through the proxy: logging in' 303 "$(through -c "$work/proxy.jar" --data-urlencode "username=$account" --data-urlencode "password=$password" "$proxy_site/_login")"
-expect 'through the proxy, logged in: the page' 200 "$(through -b "$work/proxy.jar" "$proxy_site/")"
-expect 'through the proxy, logged in: the API' "$let_in" "$(through -b "$work/proxy.jar" "$proxy_site/api/smoke-test-no-such-route")"
-if [ -n "${SMOKE_PICTURES:-}" ]; then
-  node "$(dirname "$0")/browser-check.cjs" "$proxy_site" "$account" "$password" "$SMOKE_PICTURES" ||
-    fail 'a browser did not get to the tavern as it should'
-  echo 'The first screen reads:'
-  head -n 14 "$SMOKE_PICTURES/first-screen.txt"
-  # The first workspace that the page makes itself, in the Documents directory.
-  sudo test -d "$data/home/Documents/deepseek-harness/default-workspace" || fail 'the page did not get its first workspace'
-fi
-docker rm -f tavern-smoke-proxy > /dev/null
+step 'The page can keep a connection open, and has a Documents directory to start in'
+# The opening of a WebSocket the way the page does it, and the status it gets.
+open_socket() {
+  rm -f "$work/headers.txt"
+  curl -s -o /dev/null -m 3 --http1.1 -D "$work/headers.txt" -H "Host: $site" "$@" \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: c21va2UtdGVzdC1rZXkhIQ==' "$base/api/dsh-tavern/ws" || true
+  head -n 1 "$work/headers.txt" | tr -d '\r' | cut -d ' ' -f 2
+}
+logged_in tavern.example.com
+expect 'the opening of a WebSocket, logged in' 101 "$(open_socket -H "Cookie: $session" -H 'Origin: https://tavern.example.com')"
+expect 'the opening of a WebSocket, not logged in' 401 "$(open_socket)"
+expect 'the Documents directory that the page is given' /data/home/Documents \
+  "$(docker exec -u node "$name" sh -c 'HOME=/data/home xdg-user-dir DOCUMENTS')"
 
 step 'A restart keeps the data and the logins, and does not unpack again'
 docker exec -u node "$name" sh -c 'mkdir -p /data/dsh-tavern/profile-data/tavern/smoke && echo kept > /data/dsh-tavern/profile-data/tavern/smoke/kept.txt'

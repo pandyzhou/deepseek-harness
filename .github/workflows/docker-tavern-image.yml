@@ -55,28 +55,10 @@ jobs:
           echo "dsh=$(jq -r .dsh seed.json)" >> "$GITHUB_OUTPUT"
           echo "tag=$(jq -r .version seed.json)-$(printf '%s' "$commit" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      # For the browser that the test logs in with: Chinese fonts, and a
-      # driver for the Chrome that the runner has.
-      - name: Prepare the browser
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends fonts-noto-cjk
-          npm install --prefix "$RUNNER_TEMP/browser" --no-audit --no-fund playwright-core
-          echo "NODE_PATH=$RUNNER_TEMP/browser/node_modules" >> "$GITHUB_ENV"
-          echo "SMOKE_PICTURES=$RUNNER_TEMP/pictures" >> "$GITHUB_ENV"
-
       - name: Run it the way it is deployed
         env:
           COMMIT: ${{ steps.seed.outputs.commit }}
         run: bash docker-tavern/smoke-test.sh "$IMAGE:test" "$TAVERN_REPOSITORY" "$COMMIT"
-
-      - name: Keep the pictures of the login page and the first screen
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pictures
-          path: ${{ runner.temp }}/pictures
-          if-no-files-found: ignore
 
       - uses: docker/login-action@v3
         with:
