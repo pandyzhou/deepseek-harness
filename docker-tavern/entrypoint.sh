@@ -213,6 +213,14 @@ if [ "$(seed commit)" != "$(jq -r .commit "$marker")" ]; then
 fi
 ensure_trust_row
 
+# The page makes itself a first workspace in the Documents directory of the
+# user, which it asks xdg-user-dir for, and says that it cannot when there is
+# none. This user has no desktop that would have set one up.
+mkdir -p "$HOME/.config" "$HOME/Documents"
+if [ ! -e "$HOME/.config/user-dirs.dirs" ]; then
+  say 'XDG_DOCUMENTS_DIR="$HOME/Documents"' > "$HOME/.config/user-dirs.dirs"
+fi
+
 mkdir -p "$TAVERN_HOME/logs"
 touch "$log"
 tail -n 0 -F "$log" 2> /dev/null | without_link &

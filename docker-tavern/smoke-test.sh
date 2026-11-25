@@ -287,6 +287,8 @@ if [ -n "${SMOKE_PICTURES:-}" ]; then
     fail 'a browser did not get to the tavern as it should'
   echo 'The first screen reads:'
   head -n 14 "$SMOKE_PICTURES/first-screen.txt"
+  # The first workspace that the page makes itself, in the Documents directory.
+  sudo test -d "$data/home/Documents/deepseek-harness/default-workspace" || fail 'the page did not get its first workspace'
 fi
 docker rm -f tavern-smoke-proxy > /dev/null
 

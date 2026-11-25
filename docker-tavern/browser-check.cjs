@@ -83,7 +83,10 @@ async function main() {
     check('the frame does not reach what needs the login', closed === 'no answer', closed)
 
     await page.screenshot({ path: path.join(directory, 'first-screen.png') })
-    writeFileSync(path.join(directory, 'first-screen.txt'), `${title}\n${address.origin}${address.pathname}\n\n${await page.evaluate(() => document.body.innerText)}\n`)
+    const text = await page.evaluate(() => document.body.innerText)
+    writeFileSync(path.join(directory, 'first-screen.txt'), `${title}\n${address.origin}${address.pathname}\n\n${text}\n`)
+    // What the page says when it finds no Documents directory to start in.
+    check('the page starts without a complaint about its workspace', !text.includes('无法创建默认工作区'), text.includes('无法创建默认工作区') ? 'it complains' : 'no complaint')
   } finally {
     await browser.close()
   }
