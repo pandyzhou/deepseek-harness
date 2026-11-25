@@ -4,7 +4,8 @@
 #   smoke-test.sh <image> [<repository> <commit>]
 #
 # With a repository and a commit of dsh-tavern it also runs an update inside the
-# container, to that same commit.
+# container, to that same commit. With SMOKE_PICTURES naming a directory, it
+# leaves a picture of the first screen there (see first-screen.cjs).
 set -euo pipefail
 
 image=$1
@@ -164,6 +165,12 @@ hide < "$work/status.txt"
 who=$(docker exec "$name" sh -c 'ps -o user= -p "$(pgrep -o -f -- "$0")" | xargs' "$service")
 expect 'the service runs as' node "$who"
 expect 'the files belong to user' 1000 "$(sudo stat -c %u "$home/profiles/tavern/package.json")"
+if [ -n "${SMOKE_PICTURES:-}" ]; then
+  node "$(dirname "$0")/first-screen.cjs" "$base/?token=$fresh" "$SMOKE_PICTURES" ||
+    fail 'no picture of the first screen could be taken'
+  echo 'The first screen reads:'
+  head -n 60 "$SMOKE_PICTURES/first-screen.txt" | hide
+fi
 
 step 'Only the names given are let in'
 let_in=$(api)
