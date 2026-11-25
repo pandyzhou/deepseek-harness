@@ -122,7 +122,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker image ls "$image" --format 'size of the image: {{.Size}}'
-docker run --rm --entrypoint cat "$image" /opt/dsh-tavern/seed.json
+docker run --rm --entrypoint cat "$image" /opt/dsh-tavern/seed.json | tee "$work/seed.json"
 
 step 'An address that is not one is refused before anything is unpacked'
 if docker run --rm -e DSH_PUBLIC_URL=tavern.example.com "$image" > "$work/refused.txt" 2>&1; then
@@ -217,6 +217,17 @@ wait_token "$before"
 [ ! -e "$home/.tavern-install.lock" ] || fail 'the lock of an install that no longer runs is still there'
 [ ! -e "$home/apps/dsh-tavern.staging" ] || fail 'the half-prepared version is still there'
 
+step 'A directory that another image filled keeps its tavern, and is told so once'
+before=$fresh
+docker stop "$name" > /dev/null
+sudo sed -i 's/"commit":"[0-9a-f]*"/"commit":"0000000000000000000000000000000000000000"/' "$home/.docker-seed"
+docker start "$name" > /dev/null
+wait_up 300
+wait_token "$before"
+expect 'times the image said that it carries another version' 1 "$(count '这个镜像自带的酒馆是')"
+expect 'times the install was unpacked' 1 "$(count '放进数据目录')"
+expect 'the commit recorded for the directory' "$(jq -r .commit "$work/seed.json")" "$(sudo jq -r .commit "$home/.docker-seed")"
+
 step 'The dsh-tavern command restarts the service, and the container stays'
 before=$fresh
 since=$(docker inspect -f '{{.State.StartedAt}}' "$name")
@@ -299,6 +310,7 @@ expect 'times the install was unpacked at a start' 2 "$(count '放进数据目�
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 login tavern.example.com "$fresh"
 expect_let_in 'the public name, after the repair' "$(api)"
+expect 'times the image said that it carries another version' 1 "$(count '这个镜像自带的酒馆是')"
 sudo du -sm "$data"
 docker rm -f "$name" > /dev/null
 
