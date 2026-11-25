@@ -1,6 +1,6 @@
 # DeepSeek Harness (dsh) as one process: the published npm package on Node.js,
-# serving its Web UI over plain HTTP for a reverse proxy in front of it. There
-# is no login inside the image; the reverse proxy must ask for one.
+# serving its Web UI over plain HTTP for a reverse proxy in front of it. The
+# login is dsh's own: the link with its token is printed when it starts.
 FROM node:24-bookworm-slim
 
 # The version of @deepseek-ai/dsh to install.

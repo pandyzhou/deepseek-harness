@@ -63,18 +63,25 @@ jobs:
           docker run --rm "$IMAGE:test" --help | head -5
           docker run -d --name dsh -p 127.0.0.1:13080:3080 \
             -e DSH_TRUSTED_HOSTS=127.0.0.1:13080 "$IMAGE:test"
+          # The login link is printed once the Web UI listens.
           for _ in $(seq 1 60); do
-            if curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:13080/; then
-              ok=1
+            token="$(docker logs dsh 2>&1 | sed -n 's/.*[?&]token=\([A-Za-z0-9_-]*\).*/\1/p' | tail -1)"
+            if [ -n "$token" ]; then
               break
             fi
             sleep 2
           done
-          docker logs dsh 2>&1 | tail -40
+          docker logs dsh 2>&1 | sed 's/token=[A-Za-z0-9_-]*/token=<hidden>/' | tail -40
           docker top dsh
-          test "${ok:-}" = 1
+          test -n "$token"
+          # Without the token nobody gets in; with it, the page loads, and
+          # the cookie it leaves gets in afterwards.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13080/)" = 401
+          test "$(curl -sL -c jar -o /dev/null -w '%{http_code}' "http://127.0.0.1:13080/?token=$token")" = 200
+          test "$(curl -s -b jar -o page.html -w '%{http_code}' http://127.0.0.1:13080/)" = 200
+          grep -qi '<html' page.html
           # Not as root, and healthy by the image's own check.
-          who="$(docker exec dsh sh -c 'ps -o user= -C node | sort -u | xargs')"
+          who="$(docker exec dsh sh -c 'ps -o user= -p "$(pgrep -f lib/bin.js | head -1)" | xargs')"
           echo "dsh runs as: $who"
           test "$who" = node
           docker exec dsh dsh-healthcheck

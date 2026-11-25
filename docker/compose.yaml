@@ -1,5 +1,5 @@
-# An example. Put a reverse proxy that asks for a login in front of
-# 127.0.0.1:10443 (plain HTTP); the container itself asks for none.
+# An example. Put a reverse proxy with HTTPS in front of 127.0.0.1:10443
+# (plain HTTP). The login link, with its token, is in `docker logs dsh`.
 services:
   dsh:
     image: ghcr.io/pandyzhou/dsh:latest
