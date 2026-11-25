@@ -14,11 +14,15 @@ commit=${3:-}
 name=tavern-smoke
 port=13081
 base=http://127.0.0.1:$port
+# The name the published port is reached by here, without a reverse proxy.
+direct=127.0.0.1:$port
 data=/tmp/tavern-smoke-data
 home=$data/dsh-tavern
 work=$(mktemp -d)
 service='--profile tavern .*--port '
+site=
 session=
+let_in=
 
 step() { printf '\n=== %s\n' "$*"; }
 hide() { sed -E 's/(token=)[A-Za-z0-9._~%-]+/\1<hidden>/g'; }
@@ -72,23 +76,23 @@ wait_token() {
   fail 'no new login link was printed'
 }
 
-# Logs in with a token and keeps the cookie it leaves, in $session.
+# Logs in with a token the way a browser does that reaches the page under the
+# given name, and keeps the cookie it is given, in $session. The service makes
+# the cookie out to that name and takes it from requests for that name only.
 login() {
   local status
+  site=$1
   rm -f "$work/jar"
-  status=$(code -c "$work/jar" "$base/?token=$1")
-  case "$status" in 200 | 30?) ;; *) fail "the login link answered $status" ;; esac
+  status=$(code -H "Host: $site" -c "$work/jar" "$base/?token=$2")
+  case "$status" in 200 | 30?) ;; *) fail "the login link answered $status for $site" ;; esac
   session=$(awk -F '\t' '($1 !~ /^#/ || $1 ~ /^#HttpOnly_/) && NF >= 7 { printf "%s%s=%s", sep, $6, $7; sep = "; " }' "$work/jar")
-  [ -n "$session" ] || fail 'the login link left no cookie'
+  [ -n "$session" ] || fail "the login link left no cookie for $site"
 }
 
-# The status of a request for the API, logged in, as it arrives through a
-# reverse proxy for the given name.
-api() {
-  local host=$1
-  shift
-  code -H "Host: $host" -H "Cookie: $session" "$@" "$base/api/smoke-test-no-such-route"
-}
+# The status of the page, and of a request for the API, under the name of the
+# last login and with its cookie, as they arrive through a reverse proxy.
+page() { code -H "Host: $site" -H "Cookie: $session" "$@" "$base/"; }
+api() { code -H "Host: $site" -H "Cookie: $session" "$@" "$base/api/smoke-test-no-such-route"; }
 
 expect() {
   local what=$1 wanted=$2 got=$3
@@ -96,15 +100,19 @@ expect() {
   case " $wanted " in *" $got "*) ;; *) fail "$what: expected $wanted, got $got" ;; esac
 }
 
-# Let in: whatever the API then answers about a route it does not have, it is
-# neither "log in first" nor "not from this name".
+# Let in: the API answers about the route, which it does not have, as it does
+# when reached directly, and neither "log in first" nor "not from this name".
 expect_let_in() {
   local what=$1 got=$2
   printf '%-64s %s\n' "$what" "$got"
   case "$got" in 000 | 401 | 403) fail "$what: was refused with $got" ;; esac
+  [ "$got" = "$let_in" ] || fail "$what: answered $got, but $let_in when reached directly"
 }
 
-count() { logs; grep -c -- "$1" "$work/logs.txt" || true; }
+count() {
+  logs
+  grep -c -- "$1" "$work/logs.txt" || true
+}
 
 cleanup() {
   docker rm -f tavern-smoke tavern-smoke-volume > /dev/null 2>&1 || true
@@ -114,7 +122,6 @@ cleanup() {
 trap cleanup EXIT
 
 docker image ls "$image" --format 'size of the image: {{.Size}}'
-docker history --format '{{.Size}}\t{{.CreatedBy}}' "$image" | cut -c 1-110
 docker run --rm --entrypoint cat "$image" /opt/dsh-tavern/seed.json
 
 step 'An address that is not one is refused before anything is unpacked'
@@ -142,27 +149,37 @@ sudo du -sm "$data"
 
 step 'Nobody gets in without the token; with it, the page is the tavern'
 expect 'without the token' 401 "$(code "$base/")"
-login "$fresh"
-expect 'the page, with the cookie' 200 "$(code -H "Cookie: $session" "$base/")"
+login "$direct" "$fresh"
+expect 'the page, with the cookie' 200 "$(page)"
 curl -s -m 10 -H "Cookie: $session" -o "$work/page.html" "$base/"
 grep -qi '<html' "$work/page.html" || fail 'the page is not HTML'
 { grep -o 'dsh-tavern[a-z-]*' "$work/page.html" | sort | uniq -c | sort -rn; } > "$work/mentions.txt" || true
 head -n 8 "$work/mentions.txt"
 [ -s "$work/mentions.txt" ] || fail 'the page does not load the tavern'
-docker exec "$name" dsh-tavern status > "$work/status.txt" 2>&1 || { cat "$work/status.txt"; fail 'dsh-tavern status failed'; }
+docker exec "$name" dsh-tavern status > "$work/status.txt" 2>&1 || {
+  cat "$work/status.txt"
+  fail 'dsh-tavern status failed'
+}
 hide < "$work/status.txt"
 who=$(docker exec "$name" sh -c 'ps -o user= -p "$(pgrep -o -f -- "$0")" | xargs' "$service")
 expect 'the service runs as' node "$who"
 expect 'the files belong to user' 1000 "$(sudo stat -c %u "$home/profiles/tavern/package.json")"
 
 step 'Only the names given are let in'
-expect_let_in 'the public name' "$(api tavern.example.com)"
-expect_let_in 'the public name, from its own HTTPS page' "$(api tavern.example.com -H 'Origin: https://tavern.example.com')"
-expect_let_in 'a second name with its port' "$(api second.example.com:8443)"
-expect 'the second name on another port' 403 "$(api second.example.com)"
-expect 'a name that was not given' 403 "$(api evil.example.com)"
-expect 'the public name, from the page of another site' 403 "$(api tavern.example.com -H 'Origin: https://evil.example.com')"
-expect 'the public name, not logged in' '401 403' "$(code -H 'Host: tavern.example.com' "$base/api/smoke-test-no-such-route")"
+let_in=$(api)
+expect_let_in 'the API, reached directly' "$let_in"
+login tavern.example.com "$fresh"
+expect 'the page under the public name' 200 "$(page)"
+expect_let_in 'the public name' "$(api)"
+expect_let_in 'the public name, from its own HTTPS page' "$(api -H 'Origin: https://tavern.example.com')"
+expect 'the public name, from the page of another site' 403 "$(api -H 'Origin: https://evil.example.com')"
+expect 'the public name, not logged in' 401 "$(code -H 'Host: tavern.example.com' "$base/api/smoke-test-no-such-route")"
+login second.example.com:8443 "$fresh"
+expect_let_in 'a second name with its port' "$(api)"
+login second.example.com "$fresh"
+expect 'the second name on another port' 403 "$(api)"
+login evil.example.com "$fresh"
+expect 'a name that was not given' 403 "$(api)"
 
 step 'The health check of the image'
 health=starting
@@ -173,15 +190,17 @@ for _ in $(seq 1 30); do
 done
 expect 'health' healthy "$health"
 
-step 'A restart keeps the data and does not unpack again'
+step 'A restart keeps the data and the logins, and does not unpack again'
 docker exec -u node "$name" sh -c 'echo kept > /data/dsh-tavern/profile-data/tavern/data/cards/smoke.txt'
+login tavern.example.com "$fresh"
 before=$fresh
 docker restart "$name" > /dev/null
 wait_up 300
 wait_token "$before"
 expect 'times the install was unpacked' 1 "$(count '放进数据目录')"
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
-echo "the cookie from before the restart now answers: $(code -H "Cookie: $session" "$base/")"
+expect 'the page, with the cookie from before the restart' 200 "$(page)"
+expect_let_in 'the public name, with the cookie from before' "$(api)"
 
 step 'Leftovers of a container that was killed do not keep the next from starting'
 before=$fresh
@@ -201,14 +220,17 @@ wait_token "$before"
 step 'The dsh-tavern command restarts the service, and the container stays'
 before=$fresh
 since=$(docker inspect -f '{{.State.StartedAt}}' "$name")
-docker exec "$name" dsh-tavern restart > "$work/restart.txt" 2>&1 || { hide < "$work/restart.txt"; fail 'dsh-tavern restart failed'; }
+docker exec "$name" dsh-tavern restart > "$work/restart.txt" 2>&1 || {
+  hide < "$work/restart.txt"
+  fail 'dsh-tavern restart failed'
+}
 hide < "$work/restart.txt"
 wait_up 300
 wait_token "$before"
 expect 'the container was not restarted' "$since" "$(docker inspect -f '{{.State.StartedAt}}' "$name")"
-login "$fresh"
-expect 'the page, after the restart' 200 "$(code -H "Cookie: $session" "$base/")"
-expect_let_in 'the public name, after the restart' "$(api tavern.example.com)"
+login tavern.example.com "$fresh"
+expect 'the page under the public name, after the restart' 200 "$(page)"
+expect_let_in 'the public name, after the restart' "$(api)"
 
 if [ -n "$commit" ]; then
   step 'An update inside the container, as the page starts one'
@@ -227,9 +249,9 @@ if [ -n "$commit" ]; then
   wait_token "$before"
   expect 'the container was not restarted' "$since" "$(docker inspect -f '{{.State.StartedAt}}' "$name")"
   expect 'the installed commit' "$commit" "$(sudo jq -r .commit "$home/apps/dsh-tavern/.dsh-tavern-release.json")"
-  login "$fresh"
-  expect 'the page, after the update' 200 "$(code -H "Cookie: $session" "$base/")"
-  expect_let_in 'the public name, after the update' "$(api tavern.example.com)"
+  login tavern.example.com "$fresh"
+  expect 'the page under the public name, after the update' 200 "$(page)"
+  expect_let_in 'the public name, after the update' "$(api)"
   expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
 fi
 
@@ -275,6 +297,8 @@ wait_up 300
 wait_token "$before"
 expect 'times the install was unpacked at a start' 2 "$(count '放进数据目录')"
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
+login tavern.example.com "$fresh"
+expect_let_in 'the public name, after the repair' "$(api)"
 sudo du -sm "$data"
 docker rm -f "$name" > /dev/null
 
@@ -284,7 +308,7 @@ docker run -d --name "$name" -p "127.0.0.1:$port:3081" \
   -e DSH_PUBLIC_URL=https://tavern.example.com/ -v tavern-smoke-volume:/data "$image" > /dev/null
 wait_up 900
 wait_token ''
-login "$fresh"
-expect 'the page' 200 "$(code -H "Cookie: $session" "$base/")"
+login "$direct" "$fresh"
+expect 'the page' 200 "$(page)"
 
 printf '\nAll checks passed.\n'
