@@ -1,0 +1,19 @@
+#!/bin/sh
+# The dsh-tavern command of the install in /data, as the user node and with the
+# environment the entrypoint starts the service with:
+#
+#   docker exec <container> dsh-tavern status
+set -eu
+
+if [ "$(id -u)" -eq 0 ]; then
+  exec setpriv --reuid node --regid node --init-groups /usr/local/bin/dsh-tavern "$@"
+fi
+
+. /usr/local/lib/dsh-tavern-docker/env.sh
+
+launcher=$TAVERN_APP/bin/dsh-tavern.mjs
+if [ ! -f "$launcher" ]; then
+  echo '数据目录里还没有酒馆：先让容器正常启动一次。' >&2
+  exit 1
+fi
+exec node "$launcher" "$@"

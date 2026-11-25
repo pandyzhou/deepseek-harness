@@ -1,0 +1,105 @@
+name: Docker image (tavern)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - docker-tavern/**
+      - '!docker-tavern/**.md'
+      - .github/workflows/docker-tavern-image.yml
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: The commit of flizzywine/dsh-tavern to build, in full; the head of its main when empty
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-tavern-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'pandyzhou/deepseek-harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      IMAGE: ghcr.io/pandyzhou/dsh-tavern
+      TAVERN_REPOSITORY: flizzywine/dsh-tavern
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docker-tavern
+
+      - name: Choose the commit
+        id: commit
+        env:
+          ASKED: ${{ inputs.commit }}
+        run: |
+          commit="$ASKED"
+          if [ -z "$commit" ]; then
+            commit="$(git ls-remote "https://github.com/$TAVERN_REPOSITORY.git" refs/heads/main | cut -f1)"
+          fi
+          if ! printf '%s' "$commit" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "Not a full commit id: $commit"
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Building $TAVERN_REPOSITORY at $commit"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-tavern
+          load: true
+          build-args: |
+            TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
+            TAVERN_COMMIT=${{ steps.commit.outputs.commit }}
+          tags: ${{ env.IMAGE }}:test
+          cache-from: type=gha,scope=tavern
+          cache-to: type=gha,mode=max,scope=tavern
+
+      - name: Read what the image carries
+        id: seed
+        env:
+          COMMIT: ${{ steps.commit.outputs.commit }}
+        run: |
+          docker run --rm --entrypoint cat "$IMAGE:test" /opt/dsh-tavern/seed.json > seed.json
+          cat seed.json
+          test "$(jq -r .commit seed.json)" = "$COMMIT"
+          echo "version=$(jq -r .version seed.json)" >> "$GITHUB_OUTPUT"
+          echo "dsh=$(jq -r .dsh seed.json)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(jq -r .version seed.json)-$(printf '%s' "$COMMIT" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Run it the way it is deployed
+        env:
+          COMMIT: ${{ steps.commit.outputs.commit }}
+        run: bash docker-tavern/smoke-test.sh "$IMAGE:test" "$TAVERN_REPOSITORY" "$COMMIT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-tavern
+          push: true
+          build-args: |
+            TAVERN_REPOSITORY=${{ env.TAVERN_REPOSITORY }}
+            TAVERN_COMMIT=${{ steps.commit.outputs.commit }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.seed.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/pandyzhou/deepseek-harness
+            org.opencontainers.image.description=DSH Tavern ${{ steps.seed.outputs.version }} (flizzywine/dsh-tavern at ${{ steps.commit.outputs.commit }}, AGPL-3.0) with DeepSeek Harness ${{ steps.seed.outputs.dsh }} (MIT)
+          cache-from: type=gha,scope=tavern

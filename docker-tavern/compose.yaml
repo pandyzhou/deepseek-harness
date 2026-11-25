@@ -1,0 +1,15 @@
+# An example. Put a reverse proxy with HTTPS in front of 127.0.0.1:10444: plain
+# HTTP behind it, the Host header passed on unchanged, WebSocket upgrades
+# passed on. The login link, with its token, is in `docker logs dsh-tavern`.
+services:
+  dsh-tavern:
+    image: ghcr.io/pandyzhou/dsh-tavern:latest
+    container_name: dsh-tavern
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DSH_PUBLIC_URL: https://tavern.example.com/
+    ports:
+      - "127.0.0.1:10444:3081"
+    volumes:
+      - ./data:/data
