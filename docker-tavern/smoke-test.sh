@@ -94,17 +94,18 @@ wait_new() {
 # Tries to log in at the login page the way a browser does that reaches it
 # under the given name, and answers the status.
 login() {
-  rm -f "$work/jar"
-  code -H "Host: $1" -c "$work/jar" -D "$work/login-headers.txt" \
+  code -H "Host: $1" -D "$work/login-headers.txt" \
     --data-urlencode "username=${2:-$account}" --data-urlencode "password=${3:-$password}" "$base/_login"
 }
 
 # Logs in, and keeps the name and the cookie it is given in $site and $session.
+# The cookie is read from the answer itself: one that is for HTTPS only is not
+# kept by curl, which talks to the gate without the reverse proxy here.
 logged_in() {
   local status
   status=$(login "$@")
   site=$1
-  session=$(awk -F '\t' '($1 !~ /^#/ || $1 ~ /^#HttpOnly_/) && NF >= 7 { printf "%s%s=%s", sep, $6, $7; sep = "; " }' "$work/jar" 2> /dev/null || true)
+  session=$(tr -d '\r' < "$work/login-headers.txt" | sed -n 's/^[Ss]et-[Cc]ookie: *\([^;]*\).*/\1/p')
   [ "$status" = 303 ] && [ -n "$session" ] || fail "the login under $1 answered $status"
 }
 
@@ -191,12 +192,12 @@ grep -qi '^location: /_login' "$work/headers.txt" || fail 'the link of the taver
 expect 'the link of the tavern for a program, from outside' 401 "$(code "$base/connect${inside#/}")"
 logged_in "$direct"
 expect 'the page, logged in' 200 "$(page)"
-curl -s -m 15 -H "Cookie: $session" -o "$work/page.html" "$base/"
+curl -s -m 15 -H "Cookie: $session" -D "$work/headers.txt" -o "$work/page.html" "$base/"
 grep -qi '<html' "$work/page.html" || fail 'the page is not HTML'
 { grep -o 'dsh-tavern[a-z-]*' "$work/page.html" | sort | uniq -c | sort -rn; } > "$work/mentions.txt" || true
 head -n 6 "$work/mentions.txt"
 [ -s "$work/mentions.txt" ] || fail 'the page does not load the tavern'
-! grep -q 'dsh-auth' "$work/jar" || fail 'the cookie of the tavern reached the browser'
+! grep -qi 'dsh-auth' "$work/headers.txt" "$work/login-headers.txt" || fail 'the cookie of the tavern reached the browser'
 docker exec "$name" dsh-tavern status > "$work/status.txt" 2>&1 || {
   cat "$work/status.txt"
   fail 'dsh-tavern status failed'
@@ -207,9 +208,24 @@ expect 'the service runs as' node "$who"
 listening=$(docker exec "$name" pgrep -a -f -- "$service")
 grep -q -- '--host 127.0.0.1 ' <<< "$listening" || fail 'the tavern listens beyond the container itself'
 expect 'the files belong to user' 1000 "$(sudo stat -c %u "$home/profiles/tavern/package.json")"
-# Nothing that runs as node, the tavern and its agent among it, has the password.
-knowing=$(docker exec "$name" sh -c 'for process in $(pgrep -u node); do tr "\0" "\n" < "/proc/$process/environ" 2> /dev/null; done | grep -c "^DSH_LOGIN_PASSWORD=" || true')
-expect 'processes that have the password' 0 "$knowing"
+# Nothing that runs as node, the tavern and its agent among it, has the
+# password: looked at as node, which sees the environment of its own processes
+# (this shell and what it starts aside, which Docker gives the container's).
+knowing=$(docker exec -u node "$name" sh -c '
+  seen=0
+  have=0
+  for process in $(pgrep -u node); do
+    [ "$process" != "$$" ] || continue
+    [ "$(ps -o ppid= -p "$process" 2> /dev/null | tr -d " ")" != "$$" ] || continue
+    [ -r "/proc/$process/environ" ] || continue
+    seen=$((seen + 1))
+    if tr "\0" "\n" < "/proc/$process/environ" | grep -q "^DSH_LOGIN_PASSWORD="; then have=$((have + 1)); fi
+  done
+  echo "$have of $seen"')
+printf '%-68s %s\n' 'processes of node that have the password' "$knowing"
+case "$knowing" in '0 of '[3-9]* | '0 of '[1-9][0-9]*) ;; *) fail "the password is in the environment of $knowing processes" ;; esac
+expect 'the environment of the first process, which has it, read as node' closed \
+  "$(docker exec -u node "$name" sh -c 'cat /proc/1/environ > /dev/null 2>&1 && echo open || echo closed')"
 
 step 'Only the names given are let in, and a login holds for its name alone'
 let_in=$(api)
