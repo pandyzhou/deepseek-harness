@@ -17,6 +17,11 @@ port=13081
 base=http://127.0.0.1:$port
 # The name the published port is reached by here, without a reverse proxy.
 direct=127.0.0.1:$port
+# The login helper's port, and the reverse proxy that is put in front of both.
+login_port=13082
+proxy_site=https://tavern.example.com
+proxy_user=smoke
+proxy_password='correct horse'
 data=/tmp/tavern-smoke-data
 home=$data/dsh-tavern
 work=$(mktemp -d)
@@ -116,7 +121,7 @@ count() {
 }
 
 cleanup() {
-  docker rm -f tavern-smoke tavern-smoke-volume > /dev/null 2>&1 || true
+  docker rm -f tavern-smoke tavern-smoke-volume tavern-smoke-proxy > /dev/null 2>&1 || true
   docker volume rm -f tavern-smoke-volume > /dev/null 2>&1 || true
   sudo rm -rf "$data" "$work"
 }
@@ -131,14 +136,21 @@ if docker run --rm -e DSH_PUBLIC_URL=tavern.example.com "$image" > "$work/refuse
 fi
 cat "$work/refused.txt"
 grep -q 'DSH_PUBLIC_URL' "$work/refused.txt" || fail 'the refusal does not name DSH_PUBLIC_URL'
+if docker run --rm -e DSH_TAVERN_LOGIN_PORT=3081 "$image" > "$work/refused.txt" 2>&1; then
+  fail 'started with the login helper on the port of the tavern'
+fi
+cat "$work/refused.txt"
+grep -q 'DSH_TAVERN_LOGIN_PORT' "$work/refused.txt" || fail 'the refusal does not name DSH_TAVERN_LOGIN_PORT'
 
 step 'First start, on an empty directory of the host that belongs to root'
 sudo rm -rf "$data"
 sudo mkdir -p "$data"
 docker run -d --name "$name" --health-interval 5s --stop-timeout 30 \
   -p "127.0.0.1:$port:3081" \
+  -p "127.0.0.1:$login_port:3082" \
   -e DSH_PUBLIC_URL=https://tavern.example.com/ \
   -e DSH_TRUSTED_HOSTS=second.example.com:8443 \
+  -e DSH_TAVERN_LOGIN_PORT=3082 \
   -v "$data:/data" "$image" > /dev/null
 began=$(date +%s)
 wait_up 900
@@ -196,6 +208,69 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 expect 'health' healthy "$health"
+
+step 'Behind a reverse proxy that checks a password, set up as openresty.conf says'
+proxy=$work/proxy
+mkdir -p "$proxy"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=tavern.example.com \
+  -addext subjectAltName=DNS:tavern.example.com -keyout "$proxy/key.pem" -out "$proxy/cert.pem" 2> /dev/null
+printf '%s:%s\n' "$proxy_user" "$(openssl passwd -apr1 "$proxy_password")" > "$proxy/htpasswd"
+sed -e 's#/path/to/fullchain.pem#/etc/nginx/tavern/cert.pem#' \
+  -e 's#/path/to/privkey.pem#/etc/nginx/tavern/key.pem#' \
+  -e 's#/path/to/tavern.htpasswd#/etc/nginx/tavern/htpasswd#' \
+  -e "s#127.0.0.1:10444#127.0.0.1:$port#" \
+  -e "s#127.0.0.1:10445#127.0.0.1:$login_port#" \
+  "$(dirname "$0")/openresty.conf" > "$proxy/site.conf"
+chmod -R a+rX "$proxy"
+docker run -d --name tavern-smoke-proxy --network host \
+  -v "$proxy/site.conf:/etc/nginx/conf.d/default.conf:ro" -v "$proxy:/etc/nginx/tavern:ro" \
+  openresty/openresty:alpine > /dev/null
+
+# A request to the site through the proxy, and its status.
+proxied() { curl -sk -m 15 --resolve tavern.example.com:443:127.0.0.1 "$@"; }
+through() { proxied -o /dev/null -w '%{http_code}' "$@" || true; }
+knows=(-u "$proxy_user:$proxy_password")
+
+for _ in $(seq 1 30); do
+  [ "$(through "$proxy_site/version")" != 200 ] || break
+  sleep 1
+done
+expect 'no password: what cards fetch' 200 "$(through "$proxy_site/version")"
+expect 'no password: writing where cards fetch' 401 "$(through -X POST "$proxy_site/api/dsh-tavern/static-assets")"
+expect 'no password: the API' 401 "$(through "$proxy_site/api/smoke-test-no-such-route")"
+expect 'no password: the page' 401 "$(through -D "$work/headers.txt" "$proxy_site/")"
+grep -qi '^www-authenticate: *basic' "$work/headers.txt" || fail 'no password: the browser is not asked for one'
+! grep -qi '^location:' "$work/headers.txt" || fail 'no password: sent on to the login link'
+expect 'a wrong password: the page' 401 "$(through -D "$work/headers.txt" -u "$proxy_user:wrong" "$proxy_site/")"
+! grep -qi '^location:' "$work/headers.txt" || fail 'a wrong password: sent on to the login link'
+# The opening of a WebSocket is passed on without the password, and the tavern
+# refuses it for want of its own cookie.
+proxied -o /dev/null -D "$work/headers.txt" --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: c21va2UtdGVzdC1rZXkhIQ==' "$proxy_site/api/remote.mux" || true
+printf '%-64s %s\n' 'no password: the opening of a WebSocket' "$(head -n 1 "$work/headers.txt" | tr -d '\r')"
+! grep -qi '^www-authenticate:' "$work/headers.txt" || fail 'the opening of a WebSocket is asked for the password'
+! grep -q '^HTTP/1.1 101' "$work/headers.txt" || fail 'a WebSocket was opened without any login'
+
+rm -f "$work/proxy.jar"
+expect 'the password, not logged in to the tavern: the page' 302 "$(through -D "$work/headers.txt" "${knows[@]}" "$proxy_site/")"
+grep -qi '^location: /?token=' "$work/headers.txt" || fail 'the password: not sent on to the login link'
+expect 'the password: on from there to the page' 200 "$(through "${knows[@]}" -L -c "$work/proxy.jar" -b "$work/proxy.jar" "$proxy_site/")"
+expect 'the password and the cookie: the page' 200 "$(through "${knows[@]}" -b "$work/proxy.jar" "$proxy_site/")"
+expect 'the password and the cookie: the API' "$let_in" "$(through "${knows[@]}" -b "$work/proxy.jar" "$proxy_site/api/smoke-test-no-such-route")"
+expect 'the cookie without the password: the page' 401 "$(through -b "$work/proxy.jar" "$proxy_site/")"
+expect 'the password and a link that is out of date' 302 "$(through "${knows[@]}" "$proxy_site/?token=out-of-date")"
+
+if [ -n "${SMOKE_PICTURES:-}" ]; then
+  node "$(dirname "$0")/proxy-check.cjs" "$proxy_site" "$proxy_user" "$proxy_password" "$SMOKE_PICTURES" ||
+    fail 'a browser did not get through the proxy as it should'
+  # What the proxy saw of the frame's request for what needs the login: no
+  # account with it, and so it asked for the password.
+  docker logs tavern-smoke-proxy > "$work/proxy.txt" 2>&1 || true
+  grep -F 'card-image?smoke=1' "$work/proxy.txt" > "$work/apart.txt" || fail 'the request of the frame did not reach the proxy'
+  cat "$work/apart.txt"
+  grep -q '^[^ ]* - - .*" 401 ' "$work/apart.txt" || fail 'the request of the frame carried the password after all'
+fi
+docker rm -f tavern-smoke-proxy > /dev/null
 
 step 'A restart keeps the data and the logins, and does not unpack again'
 docker exec -u node "$name" sh -c 'mkdir -p /data/dsh-tavern/profile-data/tavern/smoke && echo kept > /data/dsh-tavern/profile-data/tavern/smoke/kept.txt'

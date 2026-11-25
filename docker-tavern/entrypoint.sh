@@ -15,6 +15,11 @@
 #   DSH_TAVERN_PORT    the port to listen on; 3081 by default
 #   DSH_TAVERN_BIND    the address to listen on; one address of the container,
 #                      its first by default (the service refuses 0.0.0.0)
+#   DSH_TAVERN_LOGIN_PORT
+#                      a second port, for a reverse proxy that checks an account
+#                      and a password itself: it sends a browser on to the login
+#                      link (see support/login-helper.cjs). Whoever reaches it is
+#                      let in, so it is off unless set, and for the proxy alone.
 set -euo pipefail
 
 lib=/usr/local/lib/dsh-tavern-docker
@@ -38,6 +43,8 @@ launcher=$TAVERN_APP/bin/dsh-tavern.mjs
 marker=$TAVERN_HOME/.docker-seed
 patch=$TAVERN_HOME/cordis.patch.yml
 log=$TAVERN_HOME/logs/tavern.log
+# The login link the service printed last, as "/?token=...", for the helper.
+login=$run/login
 # How they show in the process table: the service itself, and whatever is
 # installing, updating or restarting it.
 service='--profile tavern .*--port '
@@ -116,6 +123,7 @@ announce() {
   local url=$1 rest
   rest=${url#*://}
   rest=${rest#*/}
+  say "/$rest" > "$login"
   if [ -n "${DSH_PUBLIC_URL:-}" ]; then
     say "登录链接（等同于密码，不要外传）：${DSH_PUBLIC_URL%/}/$rest"
   else
@@ -151,10 +159,18 @@ case "${1:-}" in
   *) exec dsh-tavern "$@" ;;
 esac
 
+case "${DSH_TAVERN_LOGIN_PORT:-}" in
+  '') ;;
+  *[!0-9]* | "$DSH_TAVERN_PORT")
+    say "DSH_TAVERN_LOGIN_PORT 应当是另一个端口号，现在是：$DSH_TAVERN_LOGIN_PORT" >&2
+    exit 64
+    ;;
+esac
+
 # Nothing of the tavern runs when a container starts. Whatever says otherwise
 # was left by the container before, and a process id recorded there may by now
 # be another process here.
-rm -f "$TAVERN_HOME/logs/tavern.pid.json" "$run/address"
+rm -f "$TAVERN_HOME/logs/tavern.pid.json" "$run/address" "$login"
 rm -rf "$TAVERN_HOME/.tavern-install.lock"
 
 # An update that the container before was stopped in the middle of: the
@@ -185,11 +201,20 @@ touch "$log"
 tail -n 0 -F "$log" 2> /dev/null &
 tail_pid=$!
 start_pid=
+helper_pid=
+
+# The login helper, when a port is set for it.
+start_helper() {
+  [ -n "${DSH_TAVERN_LOGIN_PORT:-}" ] || return 0
+  node "$lib/login-helper.cjs" &
+  helper_pid=$!
+}
 
 on_stop() {
   trap - TERM INT
   say '正在停止酒馆……'
   [ -z "$start_pid" ] || kill "$start_pid" 2> /dev/null || true
+  [ -z "$helper_pid" ] || kill "$helper_pid" 2> /dev/null || true
   stop_service
   kill "$tail_pid" 2> /dev/null || true
   exit 0
@@ -213,6 +238,10 @@ case "$DSH_TAVERN_BIND" in
 esac
 announced=$(printed_url)
 [ -z "$announced" ] || announce "$announced"
+start_helper
+if [ -n "$helper_pid" ]; then
+  say "端口 $DSH_TAVERN_LOGIN_PORT 会把访问者直接带进酒馆：只能让已经验证过账号密码的反向代理访问它。"
+fi
 
 # The service is started detached by the launcher, and an update from inside
 # the page stops it and starts another. So this stays while it runs or while
@@ -224,6 +253,9 @@ unannounced=0
 while :; do
   sleep 3 &
   wait $! || true
+  if [ -n "$helper_pid" ] && ! kill -0 "$helper_pid" 2> /dev/null; then
+    start_helper
+  fi
   now=$(pgrep -o -f -- "$service" || true)
   if [ -n "$now" ]; then
     missing=0
