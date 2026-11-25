@@ -1,9 +1,7 @@
-# An example. Put a reverse proxy with HTTPS in front of 127.0.0.1:10444: plain
-# HTTP behind it, the Host header passed on unchanged, WebSocket upgrades
-# passed on. The login link, with its token, is in `docker logs dsh-tavern`.
-#
-# With an account and a password checked by the reverse proxy instead of that
-# link, set it up as openresty.conf says and take the two lines marked below in.
+# An example. Put a reverse proxy with HTTPS in front of 127.0.0.1:10444, set
+# up as openresty.conf says: plain HTTP behind it, the Host header passed on
+# unchanged, WebSocket upgrades passed on. Opening the address then shows the
+# login page.
 services:
   dsh-tavern:
     image: ghcr.io/pandyzhou/dsh-tavern:latest
@@ -12,9 +10,11 @@ services:
     stop_grace_period: 30s
     environment:
       DSH_PUBLIC_URL: https://tavern.example.com/
-      # DSH_TAVERN_LOGIN_PORT: 3082       # for openresty.conf
+      DSH_LOGIN_USER: tavern
+      # To be filled in: the container does not start without one. Whoever
+      # knows it can run commands in the container, so make it a long one.
+      DSH_LOGIN_PASSWORD: ''
     ports:
       - "127.0.0.1:10444:3081"
-      # - "127.0.0.1:10445:3082"          # for openresty.conf
     volumes:
       - ./data:/data

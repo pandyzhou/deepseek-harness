@@ -5,6 +5,10 @@
 #   docker exec <container> dsh-tavern status
 set -eu
 
+# The password is the gate's business alone: nothing started from here, the
+# tavern and its agent among it, is to find it in its environment.
+unset DSH_LOGIN_PASSWORD DSH_LOGIN_HASH
+
 if [ "$(id -u)" -eq 0 ]; then
   exec setpriv --reuid node --regid node --init-groups /usr/local/bin/dsh-tavern "$@"
 fi

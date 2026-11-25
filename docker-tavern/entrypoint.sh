@@ -1,29 +1,42 @@
 #!/bin/bash
-# Keeps DSH Tavern running in the container.
+# Keeps DSH Tavern running in the container, behind a login page.
 #
 #   (no argument)    unpack the install into /data when it is not there, start
-#                    the service, and stay for as long as it runs
+#                    the gate and the service, and stay for as long as it runs
 #   repair           put the program files of this image back into /data and
 #                    exit; cards, chats, settings and keys stay as they are
 #   <anything else>  a command of dsh-tavern, such as `status`
 #
 # Environment:
+#   DSH_LOGIN_PASSWORD the password of the login page; there is no start
+#                      without one
+#   DSH_LOGIN_USER     the account of the login page; "tavern" by default
 #   DSH_PUBLIC_URL     the address the page is reached at through the reverse
-#                      proxy, e.g. "https://tavern.example.com/". Its name is
-#                      trusted, and the login link is printed with it.
+#                      proxy, e.g. "https://tavern.example.com/"; the tavern
+#                      answers under no name that it was not told
 #   DSH_TRUSTED_HOSTS  further names the page is reached by, separated by spaces
-#   DSH_TAVERN_PORT    the port to listen on; 3081 by default
-#   DSH_TAVERN_BIND    the address to listen on; one address of the container,
-#                      its first by default (the service refuses 0.0.0.0)
-#   DSH_TAVERN_LOGIN_PORT
-#                      a second port, for a reverse proxy that checks an account
-#                      and a password itself: it sends a browser on to the login
-#                      link (see support/login-helper.cjs). Whoever reaches it is
-#                      let in, so it is off unless set, and for the proxy alone.
+#   DSH_TAVERN_PORT    the port of the login page, the one to publish; 3081 by
+#                      default
+#   DSH_TAVERN_BIND    the address the login page listens on; every address of
+#                      the container by default
 set -euo pipefail
 
 lib=/usr/local/lib/dsh-tavern-docker
 run=/run/dsh-tavern-docker
+
+# The password does not go further than this: what runs afterwards, the tavern
+# and its agent among it, has a value derived from it and not the password.
+keep_password() {
+  local secret=/data/.login-secret
+  [ -n "${DSH_LOGIN_PASSWORD:-}" ] || return 0
+  if [ ! -s "$secret" ]; then
+    (umask 077 && head -c 32 /dev/urandom | base64 > "$secret")
+  fi
+  [ "$(id -u)" -ne 0 ] || chown node:node "$secret"
+  DSH_LOGIN_HASH=$(node "$lib/login-hash.cjs" "$secret") || exit 64
+  export DSH_LOGIN_HASH
+  unset DSH_LOGIN_PASSWORD
+}
 
 if [ "$(id -u)" -eq 0 ]; then
   # A directory mounted from the host belongs to root at first.
@@ -34,8 +47,10 @@ if [ "$(id -u)" -eq 0 ]; then
       break
     fi
   done
+  keep_password
   exec setpriv --reuid node --regid node --init-groups /usr/local/bin/docker-entrypoint.sh "$@"
 fi
+keep_password
 
 . "$lib/env.sh"
 
@@ -43,8 +58,6 @@ launcher=$TAVERN_APP/bin/dsh-tavern.mjs
 marker=$TAVERN_HOME/.docker-seed
 patch=$TAVERN_HOME/cordis.patch.yml
 log=$TAVERN_HOME/logs/tavern.log
-# The login link the service printed last, as "/?token=...", for the helper.
-login=$run/login
 # How they show in the process table: the service itself, and whatever is
 # installing, updating or restarting it.
 service='--profile tavern .*--port '
@@ -77,13 +90,13 @@ unpack() {
     say "数据目录所在的磁盘空间不够：需要约 $((need / 1024)) MB，只剩 $((free / 1024)) MB。" >&2
     exit 1
   fi
-  zstd -dc "$SEED" | tar -x --skip-old-files -C /data -f -
+  zstd -dc --long=27 "$SEED" | tar -x --skip-old-files -C /data -f -
   cp "$SEED_INFO" "$marker"
 }
 
 # A reverse proxy passes the name of the site on in the Host header, and the
 # service answers 403 to a name it was not told about. The launcher has no
-# option for more names, but the service reads this file of the home, after the
+# option for names, but the service reads this file of the home, after the
 # profile's own, and the row below adds the names in DSH_TRUSTED_HOSTS to the
 # ones the launcher passes.
 trust_row() {
@@ -113,22 +126,23 @@ ensure_trust_row() {
   fi
 }
 
-# The last address the service printed, with its login token. It prints other
-# lines that begin the same way.
-printed_url() {
+# The link the service printed last, with the token of its own login. It
+# prints other lines that begin the same way.
+printed_link() {
   grep -a '^dsh web: http' "$log" 2>/dev/null | tail -n 1 | cut -d ' ' -f 3 || true
 }
 
-announce() {
-  local url=$1 rest
-  rest=${url#*://}
-  rest=${rest#*/}
-  say "/$rest" > "$login"
-  if [ -n "${DSH_PUBLIC_URL:-}" ]; then
-    say "登录链接（等同于密码，不要外传）：${DSH_PUBLIC_URL%/}/$rest"
-  else
-    say '登录时把上面地址里的 http://IP:端口 换成你访问用的地址，?token= 后面是登录令牌。'
-  fi
+# Hands the link to the gate, which logs in to the tavern with it. Nobody else
+# has a use for it: the gate lets none of it through from outside.
+hand_over() {
+  local rest=${1#*://}
+  say "/${rest#*/}" > "$TAVERN_LOGIN_LINK"
+}
+
+# What the service and its launcher say about the link is for a tavern that is
+# reached directly, and would point to an address inside the container.
+without_link() {
+  sed -u -e '/^dsh web: http/d' -e '/打开网页（请复制完整地址）/d' -e '/带 token 的地址/d' -e '/dsh-tavern open/d'
 }
 
 stop_service() {
@@ -156,21 +170,24 @@ case "${1:-}" in
     say "已把镜像自带的酒馆 $(seed version) 放回数据目录，人物卡、聊天、设置和密钥都没有动。"
     exit 0
     ;;
-  *) exec dsh-tavern "$@" ;;
-esac
-
-case "${DSH_TAVERN_LOGIN_PORT:-}" in
-  '') ;;
-  *[!0-9]* | "$DSH_TAVERN_PORT")
-    say "DSH_TAVERN_LOGIN_PORT 应当是另一个端口号，现在是：$DSH_TAVERN_LOGIN_PORT" >&2
-    exit 64
+  *)
+    unset DSH_LOGIN_HASH
+    exec dsh-tavern "$@"
     ;;
 esac
+
+if [ -z "${DSH_LOGIN_HASH:-}" ]; then
+  say '请用 DSH_LOGIN_PASSWORD 设置登录页的密码（账号用 DSH_LOGIN_USER 设置，默认是 tavern）。' >&2
+  exit 64
+fi
+# For the gate alone; see keep_password.
+login_hash=$DSH_LOGIN_HASH
+unset DSH_LOGIN_HASH
 
 # Nothing of the tavern runs when a container starts. Whatever says otherwise
 # was left by the container before, and a process id recorded there may by now
 # be another process here.
-rm -f "$TAVERN_HOME/logs/tavern.pid.json" "$run/address" "$login"
+rm -f "$TAVERN_HOME/logs/tavern.pid.json" "$run/address" "$TAVERN_LOGIN_LINK"
 rm -rf "$TAVERN_HOME/.tavern-install.lock"
 
 # An update that the container before was stopped in the middle of: the
@@ -198,50 +215,48 @@ ensure_trust_row
 
 mkdir -p "$TAVERN_HOME/logs"
 touch "$log"
-tail -n 0 -F "$log" 2> /dev/null &
+tail -n 0 -F "$log" 2> /dev/null | without_link &
 tail_pid=$!
 start_pid=
-helper_pid=
+gate_pid=
 
-# The login helper, when a port is set for it.
-start_helper() {
-  [ -n "${DSH_TAVERN_LOGIN_PORT:-}" ] || return 0
-  node "$lib/login-helper.cjs" &
-  helper_pid=$!
+# The login page, which answers from here on, also while the tavern starts.
+start_gate() {
+  DSH_LOGIN_HASH=$login_hash node "$lib/gate.cjs" &
+  gate_pid=$!
 }
 
 on_stop() {
   trap - TERM INT
   say '正在停止酒馆……'
   [ -z "$start_pid" ] || kill "$start_pid" 2> /dev/null || true
-  [ -z "$helper_pid" ] || kill "$helper_pid" 2> /dev/null || true
+  [ -z "$gate_pid" ] || kill "$gate_pid" 2> /dev/null || true
   stop_service
   kill "$tail_pid" 2> /dev/null || true
   exit 0
 }
 trap on_stop TERM INT
 
+start_gate
+
 # In the background, so that a signal to stop does not wait for it.
-node "$launcher" start &
+node "$launcher" start > >(without_link) 2>&1 &
 start_pid=$!
 if ! wait "$start_pid"; then
   say '酒馆没能启动，原因见上面的日志。程序文件损坏时，可以停掉容器后用 repair 命令放回镜像自带的版本。' >&2
   stop_service
-  kill "$tail_pid" 2> /dev/null || true
   exit 1
 fi
 start_pid=
 
-case "$DSH_TAVERN_BIND" in
-  *:*) say "http://[$DSH_TAVERN_BIND]:$DSH_TAVERN_PORT/" > "$run/address" ;;
-  *) say "http://$DSH_TAVERN_BIND:$DSH_TAVERN_PORT/" > "$run/address" ;;
-esac
-announced=$(printed_url)
-[ -z "$announced" ] || announce "$announced"
-start_helper
-if [ -n "$helper_pid" ]; then
-  say "端口 $DSH_TAVERN_LOGIN_PORT 会把访问者直接带进酒馆：只能让已经验证过账号密码的反向代理访问它。"
+link=$(printed_link)
+[ -z "$link" ] || hand_over "$link"
+if [ "$TAVERN_GATE_BIND" = 0.0.0.0 ]; then
+  say "http://127.0.0.1:$TAVERN_GATE_PORT/version" > "$run/address"
+else
+  say "http://$TAVERN_GATE_BIND:$TAVERN_GATE_PORT/version" > "$run/address"
 fi
+say "酒馆已就绪：打开 ${DSH_PUBLIC_URL:-发布出去的地址}，用账号 ${DSH_LOGIN_USER:-tavern} 和设置的密码登录。"
 
 # The service is started detached by the launcher, and an update from inside
 # the page stops it and starts another. So this stays while it runs or while
@@ -249,28 +264,28 @@ fi
 # has been gone for a while with nothing at work.
 current=$(pgrep -o -f -- "$service" || true)
 missing=0
-unannounced=0
+unhanded=0
 while :; do
   sleep 3 &
   wait $! || true
-  if [ -n "$helper_pid" ] && ! kill -0 "$helper_pid" 2> /dev/null; then
-    start_helper
+  if ! kill -0 "$gate_pid" 2> /dev/null; then
+    start_gate
   fi
   now=$(pgrep -o -f -- "$service" || true)
   if [ -n "$now" ]; then
     missing=0
     if [ "$now" != "$current" ]; then
-      # Started again, with another login token, printed once it listens.
+      # Started again, with another link, printed once it listens.
       current=$now
-      unannounced=100
+      unhanded=100
     fi
-    if [ "$unannounced" -gt 0 ]; then
-      unannounced=$((unannounced - 1))
-      url=$(printed_url)
-      if [ -n "$url" ] && [ "$url" != "$announced" ]; then
-        unannounced=0
-        announced=$url
-        announce "$url"
+    if [ "$unhanded" -gt 0 ]; then
+      unhanded=$((unhanded - 1))
+      fresh=$(printed_link)
+      if [ -n "$fresh" ] && [ "$fresh" != "$link" ]; then
+        unhanded=0
+        link=$fresh
+        hand_over "$link"
       fi
     fi
   elif pgrep -f -- "$busy" > /dev/null; then
@@ -279,7 +294,6 @@ while :; do
     missing=$((missing + 1))
     if [ "$missing" -ge 5 ]; then
       say '酒馆的服务已经退出，容器随之退出。' >&2
-      kill "$tail_pid" 2> /dev/null || true
       exit 1
     fi
   fi
