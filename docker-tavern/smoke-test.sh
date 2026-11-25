@@ -191,14 +191,14 @@ done
 expect 'health' healthy "$health"
 
 step 'A restart keeps the data and the logins, and does not unpack again'
-docker exec -u node "$name" sh -c 'echo kept > /data/dsh-tavern/profile-data/tavern/data/cards/smoke.txt'
+docker exec -u node "$name" sh -c 'mkdir -p /data/dsh-tavern/profile-data/tavern/smoke && echo kept > /data/dsh-tavern/profile-data/tavern/smoke/kept.txt'
 login tavern.example.com "$fresh"
 before=$fresh
 docker restart "$name" > /dev/null
 wait_up 300
 wait_token "$before"
 expect 'times the install was unpacked' 1 "$(count '放进数据目录')"
-expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
+expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 expect 'the page, with the cookie from before the restart' 200 "$(page)"
 expect_let_in 'the public name, with the cookie from before' "$(api)"
 
@@ -252,7 +252,7 @@ if [ -n "$commit" ]; then
   login tavern.example.com "$fresh"
   expect 'the page under the public name, after the update' 200 "$(page)"
   expect_let_in 'the public name, after the update' "$(api)"
-  expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
+  expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 fi
 
 step 'When the service dies, the container ends, for Docker to start it again'
@@ -285,7 +285,7 @@ docker start "$name" > /dev/null
 wait_up 900
 wait_token "$before"
 expect 'times the install was unpacked' 2 "$(count '放进数据目录')"
-expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
+expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 
 step 'The repair command does the same on demand'
 before=$fresh
@@ -296,7 +296,7 @@ docker start "$name" > /dev/null
 wait_up 300
 wait_token "$before"
 expect 'times the install was unpacked at a start' 2 "$(count '放进数据目录')"
-expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/data/cards/smoke.txt")"
+expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 login tavern.example.com "$fresh"
 expect_let_in 'the public name, after the repair' "$(api)"
 sudo du -sm "$data"
