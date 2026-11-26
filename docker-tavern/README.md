@@ -136,6 +136,17 @@ DeepSeek Harness，所以自带一份，不和原版 dsh 共用。两个都想�
   到。现在整页滚动：给 `.dsh-tavern-preset-hub` 加上 `overflow-y: auto`，改在页面实际用
   的 `tavern-plugin/lib/client.js`（打包进去的样式）和它的来源
   `tavern-plugin/lib/client-assets/tavern.css` 里。
+- **消息里的图片撑出对话栏**（2026-11-26）：回复里单独写的 `<img>`（有些人物卡的开场白
+  用它放角色图，模型会照着写）在默认的“信任卡片”模式下直接放进页面，那里没有任何尺寸
+  限制，1254 像素宽的图会撑出对话栏，页面出现横向滚动条。放进框架（iframe）的同样的图
+  本来就限宽。现在按比例缩小，最宽 640 像素且不超过对话栏，最高不超过窗口高度的 70%：
+  给 `.dsh-tavern-inline-fragment img` 加上限制，改在 `tavern-plugin/lib/client.js` 和
+  `tavern-plugin/lib/client-assets/tavern.css` 里。
+- **自动分段把加粗弄坏**（2026-11-26）：外观 → 正文排版里的“自动分段”（默认打开）会把
+  没以句末标点结尾的一行和下一行直接拼起来。以 `**` 或 `*` 结尾的一行接上以它开头的一
+  行，就成了 `****`，加粗、斜体失效，星号原样露出来（比如有些卡每轮回复开头那几行状态
+  栏）。现在这样的两行各自成段；句末标点在强调符里面（如 `快走！**`）也算一句结束。改
+  在 `tavern-plugin/lib/client.js` 和它的来源 `tavern-plugin/src/client/features/prose-layout.js` 里。
 
 ## 来源和许可
 

@@ -53,6 +53,10 @@ fi
 TAVERN_APP="$TAVERN_APP" node - <<'EOF'
 const fs = require('node:fs')
 const path = require('node:path')
+const endsSentence = ['return TAVERN_PROSE_TERMINAL.test(value.trim());',
+  'return TAVERN_PROSE_TERMINAL.test(value.trim().replace(/[*_~]+$/, "").trimEnd()); /* docker-tavern 2026-11-26 */']
+const ownParagraph = ['if (tavernProseEndsSentence(current)) { paragraphs.push(current); current = piece; return; }',
+  'if (tavernProseEndsSentence(current) || (/[*_~]$/.test(current) && /^[*_~]/.test(piece))) { paragraphs.push(current); current = piece; return; } /* docker-tavern 2026-11-26 */']
 const fixes = [
   // 2026-11-26: the overview of the 预设 tab sits in a panel of fixed height
   // and does not scroll, so its lower rows are cut off in a short panel; it
@@ -64,6 +68,29 @@ const fixes = [
   ['tavern-plugin/lib/client-assets/tavern.css',
     '.dsh-tavern-preset-hub { container-type: inline-size; }',
     '.dsh-tavern-preset-hub { container-type: inline-size; overflow-y: auto; } /* docker-tavern 2026-11-26 */'],
+  // 2026-11-26: a picture that a reply carries as plain HTML (the greetings of
+  // some cards show the characters with <img>, and the model copies them) is
+  // put straight into the page when cards are trusted, which is the default,
+  // and nothing there limits its size: a picture 1254 px wide ran out of the
+  // column. In a frame the same picture already keeps to the width. It fits
+  // now, in proportion, at most 640 px wide and 70% of the window high.
+  ['tavern-plugin/lib/client.js',
+    '.dsh-tavern-illustration img{display:block;width:auto;height:auto;max-width:min(100%,640px);max-height:70vh;object-fit:contain;border-radius:12px}',
+    '.dsh-tavern-illustration img{display:block;width:auto;height:auto;max-width:min(100%,640px);max-height:70vh;object-fit:contain;border-radius:12px}.dsh-tavern-inline-fragment img{max-width:min(100%,640px);max-height:70vh;object-fit:contain}/* docker-tavern 2026-11-26 */'],
+  ['tavern-plugin/lib/client-assets/tavern.css',
+    '.dsh-tavern-illustration img { display: block; width: auto; height: auto; max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; border-radius: 12px; }',
+    '.dsh-tavern-illustration img { display: block; width: auto; height: auto; max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; border-radius: 12px; }\n.dsh-tavern-inline-fragment img { max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; } /* docker-tavern 2026-11-26 */'],
+  // 2026-11-26: 自动分段, which is on by default, joins two lines when the
+  // first does not end a sentence. A line that ends in ** or * followed by a
+  // line that starts with one became "****", and the bold or italics broke:
+  // the status lines that some cards write at the top of each reply showed
+  // their asterisks. Two such lines are paragraphs of their own now, and a
+  // sentence that ends inside the markup ("快走！**") counts as ended.
+  // prose-layout.js is the source of that part of client.js.
+  ['tavern-plugin/lib/client.js', ...endsSentence],
+  ['tavern-plugin/src/client/features/prose-layout.js', ...endsSentence],
+  ['tavern-plugin/lib/client.js', ...ownParagraph],
+  ['tavern-plugin/src/client/features/prose-layout.js', ...ownParagraph],
 ]
 for (const [file, from, to] of fixes) {
   const target = path.join(process.env.TAVERN_APP, file)
