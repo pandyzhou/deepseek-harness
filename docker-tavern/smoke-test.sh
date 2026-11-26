@@ -375,12 +375,19 @@ wait_up 900
 expect 'times the install was unpacked' 2 "$(count '放进数据目录')"
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 
-step 'The repair command does the same on demand'
+step 'The repair command does the same on demand, and leaves the plugins as they are'
 docker stop "$name" > /dev/null
 echo broken | sudo tee "$home/apps/dsh-tavern/bin/dsh-tavern.mjs" > /dev/null
+# STcontext is installed switched off. Switching it on removes its marker,
+# which the seed carries: the repair must not bring the marker back.
+off=$home/profile-data/tavern/data/plugins/dsh-tavern-STcontext/.tavern-disabled
+sudo test -f "$off" || fail 'STcontext is no longer installed switched off: this check needs another plugin'
+sudo rm "$off"
 docker run --rm -v "$data:/data" "$image" repair
+! sudo test -e "$off" || fail 'the repair switched off a plugin that was on'
 docker start "$name" > /dev/null
 wait_up 300
+! sudo test -e "$off" || fail 'the start after the repair switched off a plugin that was on'
 expect 'times the install was unpacked at a start' 2 "$(count '放进数据目录')"
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 expect 'the page, with the login from before all this' 200 "$(page)"

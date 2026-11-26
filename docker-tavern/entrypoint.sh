@@ -77,8 +77,18 @@ installed() {
 # a file that is there already is not overwritten: cards and chats in
 # profile-data, settings.yaml, the keys, and the model settings in the
 # profile's cordis.patch.yml.
+#
+# The folder of the tavern's plugins is left out once it is there, because a
+# file missing from it can be the user's doing. A bundled plugin that is
+# installed switched off has a marker in the seed, and switching the plugin on
+# removes the marker, which the seed would bring back. The tavern puts its
+# bundled plugins back at every start, in the state the user left them in.
 unpack() {
-  local need free
+  local need free plugins=$TAVERN_HOME/profile-data/tavern/data/plugins
+  local skip=()
+  if [ -d "$plugins" ]; then
+    skip=(--exclude="${plugins#/data/}")
+  fi
   rm -rf "$marker" "$TAVERN_HOME/apps" "$TAVERN_HOME/runtime" "$TAVERN_HOME"/runtime.install-* \
     "$TAVERN_HOME/tools" "$TAVERN_HOME/source-cache" "$HOME/.local/share/pnpm"
   if [ -d "$TAVERN_HOME/profiles/tavern" ]; then
@@ -90,7 +100,7 @@ unpack() {
     say "数据目录所在的磁盘空间不够：需要约 $((need / 1024)) MB，只剩 $((free / 1024)) MB。" >&2
     exit 1
   fi
-  zstd -dc --long=27 "$SEED" | tar -x --skip-old-files -C /data -f -
+  zstd -dc --long=27 "$SEED" | tar -x --skip-old-files "${skip[@]}" -C /data -f -
   cp "$SEED_INFO" "$marker"
 }
 
