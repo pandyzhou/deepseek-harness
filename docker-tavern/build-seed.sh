@@ -46,6 +46,38 @@ if [ -e "$TAVERN_HOME/.tavern-install.lock" ]; then
   exit 1
 fi
 
+# Fixes of our own on top of that commit, until upstream makes them; README.md
+# lists them under "在上游之上的修补". Each text to replace has to be there
+# exactly once: when a new TAVERN_COMMIT changes the code it touches, the build
+# stops here, to drop the fix if upstream has made it or to write it again.
+TAVERN_APP="$TAVERN_APP" node - <<'EOF'
+const fs = require('node:fs')
+const path = require('node:path')
+const fixes = [
+  // 2026-11-26: the overview of the 预设 tab sits in a panel of fixed height
+  // and does not scroll, so its lower rows are cut off in a short panel; it
+  // scrolls as a whole now. client.js carries the minified stylesheet that the
+  // page uses, tavern.css is its source.
+  ['tavern-plugin/lib/client.js',
+    '.dsh-tavern-preset-hub{container-type:inline-size}',
+    '.dsh-tavern-preset-hub{container-type:inline-size;overflow-y:auto}/* docker-tavern 2026-11-26 */'],
+  ['tavern-plugin/lib/client-assets/tavern.css',
+    '.dsh-tavern-preset-hub { container-type: inline-size; }',
+    '.dsh-tavern-preset-hub { container-type: inline-size; overflow-y: auto; } /* docker-tavern 2026-11-26 */'],
+]
+for (const [file, from, to] of fixes) {
+  const target = path.join(process.env.TAVERN_APP, file)
+  const text = fs.readFileSync(target, 'utf8')
+  const found = text.split(from).length - 1
+  if (found !== 1) {
+    console.error(`${file}: the text to fix is there ${found} times instead of once: ${from}`)
+    process.exit(1)
+  }
+  fs.writeFileSync(target, text.replace(from, () => to))
+  console.log(`fixed ${file}`)
+}
+EOF
+
 # Not part of an install: what the downloads were cached in, the source cache
 # that points at the repository above, and the log of this run.
 rm -rf "$work" "$HOME/.npm" "$HOME/.cache" "$TAVERN_HOME/source-cache" "$TAVERN_HOME/logs"

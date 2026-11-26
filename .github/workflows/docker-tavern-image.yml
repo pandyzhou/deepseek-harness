@@ -77,5 +77,5 @@ jobs:
             ${{ env.IMAGE }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/pandyzhou/deepseek-harness
-            org.opencontainers.image.description=DSH Tavern ${{ steps.seed.outputs.version }} (flizzywine/dsh-tavern at ${{ steps.seed.outputs.commit }}, AGPL-3.0) with DeepSeek Harness ${{ steps.seed.outputs.dsh }} (MIT)
+            org.opencontainers.image.description=DSH Tavern ${{ steps.seed.outputs.version }} (flizzywine/dsh-tavern at ${{ steps.seed.outputs.commit }} with the fixes listed in docker-tavern/README.md, AGPL-3.0) with DeepSeek Harness ${{ steps.seed.outputs.dsh }} (MIT)
           cache-from: type=gha,scope=tavern

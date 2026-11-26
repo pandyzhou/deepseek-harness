@@ -10,7 +10,7 @@ DeepSeek Harness，所以自带一份，不和原版 dsh 共用。两个都想�
 ## 镜像里有什么
 
 - 构建时运行酒馆官方的安装脚本，固定在 `TAVERN_COMMIT` 里写的那个提交上，把装好的
-  结果打包放进镜像。
+  结果打包放进镜像。装好后再打上几处上游还没修的修补，见“在上游之上的修补”。
 - 容器第一次启动时把它解包到数据目录 `/data`，约 1.7 GB。之后它就是一份标准的命令行
   版安装：程序、人物卡、聊天、设置都在数据目录里，酒馆页面里的“检查更新”照常可用。
 - 酒馆只在容器内部监听。对外的端口 3081 是一道“门”（`support/gate.cjs`）：它提供
@@ -100,8 +100,8 @@ DeepSeek Harness，所以自带一份，不和原版 dsh 共用。两个都想�
 ## 构建
 
 `.github/workflows/docker-tavern-image.yml`：改动 `docker-tavern/` 后自动构建，也可以
-手动运行。酒馆用哪个提交写在 `TAVERN_COMMIT` 里；只改脚本时预装这一步用的是缓存，
-换提交号时才会重装。
+手动运行。酒馆用哪个提交写在 `TAVERN_COMMIT` 里；预装这一步有缓存，只在换了提交号或改了
+`build-seed.sh`（修补也写在这里）时重装。
 
 构建后先把容器按部署的方式跑起来（`smoke-test.sh`），全部通过才推送。检查的内容：
 
@@ -119,9 +119,25 @@ DeepSeek Harness，所以自带一份，不和原版 dsh 共用。两个都想�
 
 推送两个标签：`酒馆版本-提交号前七位` 和 `latest`。
 
+## 在上游之上的修补
+
+上游还没修的问题，构建时在装好的文件上直接改，改法写在 `build-seed.sh` 里。每处要换掉
+的文字必须恰好出现一次，否则构建失败：换了 `TAVERN_COMMIT` 而上游动了那段代码时，构建
+停在这里，上游已经修好就删掉这处修补，没修好就照新代码重写。
+
+修补只在镜像自带的那一份里。在酒馆页面里更新（或 `dsh-tavern update`）装的是上游原版，
+修补随之没有；已经在用的数据目录要换上新镜像后执行一次 `repair` 才拿到修补。
+
+- **预设页滚不动**（2026-11-26）：“预设”标签页的总览（酒馆预设、系统提示词、长期偏好、
+  卡片工作台性格）放在固定高度的面板里，自己却不滚动，面板矮时下面几项被裁掉，也滚不
+  到。现在整页滚动：给 `.dsh-tavern-preset-hub` 加上 `overflow-y: auto`，改在页面实际用
+  的 `tavern-plugin/lib/client.js`（打包进去的样式）和它的来源
+  `tavern-plugin/lib/client-assets/tavern.css` 里。
+
 ## 来源和许可
 
 - 酒馆：[flizzywine/dsh-tavern](https://github.com/flizzywine/dsh-tavern)，AGPL-3.0。镜像
-  里是它未经改动的代码，所用的提交号写在镜像标签和 `/opt/dsh-tavern/seed.json` 里。
+  里是它的代码加上“在上游之上的修补”列出的改动，改过的地方注明了日期；所用的提交号写在
+  镜像标签和 `/opt/dsh-tavern/seed.json` 里。
 - DeepSeek Harness：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)，MIT。
 - 其余依赖来自 npm，许可随各自的包。
