@@ -46,11 +46,12 @@ if [ -e "$TAVERN_HOME/.tavern-install.lock" ]; then
   exit 1
 fi
 
-# Fixes of our own on top of that commit, until upstream makes them; README.md
-# lists them under "在上游之上的修补". Each text to replace has to be there
-# exactly once: when a new TAVERN_COMMIT changes the code it touches, the build
-# stops here, to drop the fix if upstream has made it or to write it again.
-TAVERN_APP="$TAVERN_APP" node - <<'EOF'
+# Fixes of our own on top of that commit and of the packages it installs, until
+# upstream makes them; README.md lists them under "在上游之上的修补". Each text
+# to replace has to be there exactly once: when a new TAVERN_COMMIT changes the
+# code it touches, the build stops here, to drop the fix if upstream has made it
+# or to write it again.
+TAVERN_HOME="$TAVERN_HOME" node - <<'EOF'
 const fs = require('node:fs')
 const path = require('node:path')
 const endsSentence = ['return TAVERN_PROSE_TERMINAL.test(value.trim());',
@@ -62,10 +63,10 @@ const fixes = [
   // and does not scroll, so its lower rows are cut off in a short panel; it
   // scrolls as a whole now. client.js carries the minified stylesheet that the
   // page uses, tavern.css is its source.
-  ['tavern-plugin/lib/client.js',
+  ['apps/dsh-tavern/tavern-plugin/lib/client.js',
     '.dsh-tavern-preset-hub{container-type:inline-size}',
     '.dsh-tavern-preset-hub{container-type:inline-size;overflow-y:auto}/* docker-tavern 2026-11-26 */'],
-  ['tavern-plugin/lib/client-assets/tavern.css',
+  ['apps/dsh-tavern/tavern-plugin/lib/client-assets/tavern.css',
     '.dsh-tavern-preset-hub { container-type: inline-size; }',
     '.dsh-tavern-preset-hub { container-type: inline-size; overflow-y: auto; } /* docker-tavern 2026-11-26 */'],
   // 2026-11-26: a picture that a reply carries as plain HTML (the greetings of
@@ -74,10 +75,10 @@ const fixes = [
   // and nothing there limits its size: a picture 1254 px wide ran out of the
   // column. In a frame the same picture already keeps to the width. It fits
   // now, in proportion, at most 640 px wide and 70% of the window high.
-  ['tavern-plugin/lib/client.js',
+  ['apps/dsh-tavern/tavern-plugin/lib/client.js',
     '.dsh-tavern-illustration img{display:block;width:auto;height:auto;max-width:min(100%,640px);max-height:70vh;object-fit:contain;border-radius:12px}',
     '.dsh-tavern-illustration img{display:block;width:auto;height:auto;max-width:min(100%,640px);max-height:70vh;object-fit:contain;border-radius:12px}.dsh-tavern-inline-fragment img{max-width:min(100%,640px);max-height:70vh;object-fit:contain}/* docker-tavern 2026-11-26 */'],
-  ['tavern-plugin/lib/client-assets/tavern.css',
+  ['apps/dsh-tavern/tavern-plugin/lib/client-assets/tavern.css',
     '.dsh-tavern-illustration img { display: block; width: auto; height: auto; max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; border-radius: 12px; }',
     '.dsh-tavern-illustration img { display: block; width: auto; height: auto; max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; border-radius: 12px; }\n.dsh-tavern-inline-fragment img { max-width: min(100%, 640px); max-height: 70vh; object-fit: contain; } /* docker-tavern 2026-11-26 */'],
   // 2026-11-26: 自动分段, which is on by default, joins two lines when the
@@ -87,20 +88,35 @@ const fixes = [
   // their asterisks. Two such lines are paragraphs of their own now, and a
   // sentence that ends inside the markup ("快走！**") counts as ended.
   // prose-layout.js is the source of that part of client.js.
-  ['tavern-plugin/lib/client.js', ...endsSentence],
-  ['tavern-plugin/src/client/features/prose-layout.js', ...endsSentence],
-  ['tavern-plugin/lib/client.js', ...ownParagraph],
-  ['tavern-plugin/src/client/features/prose-layout.js', ...ownParagraph],
+  ['apps/dsh-tavern/tavern-plugin/lib/client.js', ...endsSentence],
+  ['apps/dsh-tavern/tavern-plugin/src/client/features/prose-layout.js', ...endsSentence],
+  ['apps/dsh-tavern/tavern-plugin/lib/client.js', ...ownParagraph],
+  ['apps/dsh-tavern/tavern-plugin/src/client/features/prose-layout.js', ...ownParagraph],
+  // 2026-11-26: the layout for phones that the Dockerfile asks for
+  // (dsh-web-mobile) also writes thinking levels into the user's own model
+  // settings, on every device, for each model declared by hand that declares
+  // none. DSH then takes such a model for one that reasons, and the composer
+  // offers 「推理等级」 for it. That changes how the user's models are called,
+  // which nobody asked a layout for, so it is not done here. The rest of the
+  // package stays: the layout, the compression of large JSON answers, and the
+  // route that deletes a session.
+  ['profiles/tavern/node_modules/dsh-web-mobile/lib/index.js',
+    '    installReasoningEffortDefaults(ctx);',
+    '    /* docker-tavern 2026-11-26: thinking levels are not written into the model settings, see README.md */'],
 ]
 for (const [file, from, to] of fixes) {
-  const target = path.join(process.env.TAVERN_APP, file)
+  const target = path.join(process.env.TAVERN_HOME, file)
   const text = fs.readFileSync(target, 'utf8')
   const found = text.split(from).length - 1
   if (found !== 1) {
     console.error(`${file}: the text to fix is there ${found} times instead of once: ${from}`)
     process.exit(1)
   }
-  fs.writeFileSync(target, text.replace(from, () => to))
+  // Written beside it and moved over it: a file of an installed package can be
+  // a hard link into the package store, which is to keep what it holds.
+  const written = `${target}.docker-tavern`
+  fs.writeFileSync(written, text.replace(from, () => to), { mode: fs.statSync(target).mode & 0o7777 })
+  fs.renameSync(written, target)
   console.log(`fixed ${file}`)
 }
 EOF

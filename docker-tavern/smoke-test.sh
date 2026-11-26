@@ -114,6 +114,24 @@ said() { grep -v 'token=' "$1" | tail -n "$2" || true; }
 page() { code -H "Host: $site" -H "Cookie: $session" "$@" "$base/"; }
 api() { code -H "Host: $site" -H "Cookie: $session" "$@" "$base/api/smoke-test-no-such-route"; }
 
+# Whether the page loads the client code of a plugin, under the name of the
+# last login: the page names the bundle of every plugin that the service has
+# loaded. The stylesheet of the tavern names the layout for phones as well, so
+# only the name of its bundle counts.
+loads() {
+  curl -s -m 15 -H "Host: $site" -H "Cookie: $session" -o "$work/now.html" "$base/" || true
+  if grep -Eq "$1(/|%2F|\\\\/)client\\.js" "$work/now.html"; then echo loaded; else echo missing; fi
+}
+
+# The layout for phones that the image asks for, and the part of it that
+# build-seed.sh switches off: it would write thinking levels into the model
+# settings. The count of the call that does it, a slash, and the count of the
+# mark of the fix.
+layout_fix() {
+  local file=$home/profiles/tavern/node_modules/dsh-web-mobile/lib/index.js
+  echo "$(sudo grep -c 'installReasoningEffortDefaults(ctx);' "$file" || true)/$(sudo grep -c 'docker-tavern 2026-11-26' "$file" || true)"
+}
+
 count() {
   logs
   grep -c -- "$1" "$work/logs.txt" || true
@@ -194,6 +212,9 @@ grep -qi '<html' "$work/page.html" || fail 'the page is not HTML'
 { grep -o 'dsh-tavern[a-z-]*' "$work/page.html" | sort | uniq -c | sort -rn; } > "$work/mentions.txt" || true
 head -n 6 "$work/mentions.txt"
 [ -s "$work/mentions.txt" ] || fail 'the page does not load the tavern'
+expect 'the layout for phones' loaded "$(loads dsh-web-mobile)"
+expect 'the layout for phones of the desktop app, which collides with it' missing "$(loads dsh-pocket)"
+expect 'calls that write thinking levels into the model settings / fixes' 0/1 "$(layout_fix)"
 ! grep -qi 'dsh-auth' "$work/headers.txt" "$work/login-headers.txt" || fail 'the cookie of the tavern reached the browser'
 docker exec "$name" dsh-tavern status > "$work/status.txt" 2>&1 || {
   cat "$work/status.txt"
@@ -342,6 +363,8 @@ if [ -n "$commit" ]; then
   expect 'the page, with the login from before the update' 200 "$(page)"
   expect_let_in 'the public name, after the update' "$(api)"
   expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
+  # The update installs the tavern anew and reads the switch again.
+  expect 'the layout for phones, after the update' loaded "$(loads dsh-web-mobile)"
 fi
 
 step 'When the service dies, the container ends, for Docker to start it again'
@@ -392,6 +415,8 @@ expect 'times the install was unpacked at a start' 2 "$(count '放进数据目�
 expect 'the file written before' kept "$(sudo cat "$home/profile-data/tavern/smoke/kept.txt")"
 expect 'the page, with the login from before all this' 200 "$(page)"
 expect_let_in 'the public name, after the repair' "$(api)"
+expect 'the layout for phones, after the repair' loaded "$(loads dsh-web-mobile)"
+expect 'calls that write thinking levels / fixes, after the repair' 0/1 "$(layout_fix)"
 expect 'times the image said that it carries another version' 1 "$(count '这个镜像自带的酒馆是')"
 ! grep -q 'token=' "$work/logs.txt" || fail 'the log shows the link of the tavern'
 sudo du -sm "$data"

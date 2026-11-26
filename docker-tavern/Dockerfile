@@ -16,6 +16,15 @@ RUN apt-get update \
 ENV DSH_TAVERN_NPM_REGISTRY=https://registry.npmjs.org \
     DSH_TELEMETRY_DISABLED=1
 
+# The tavern gives its command-line install no layout for phones, so in the
+# browser of a phone the page of DSH around the tavern keeps the layout of a
+# computer. With this the install loads the one the tavern's Android app
+# carries (dsh-web-mobile), which changes the page on touch screens up to
+# 1023 px wide and does nothing where there is a mouse. The tavern reads it at
+# the install below and at every later update. build-seed.sh switches off the
+# part of it that writes into the model settings.
+ENV DSH_TAVERN_MOBILE_LAYOUT=1
+
 # The commit of dsh-tavern that the image carries is the one in TAVERN_COMMIT.
 # This step is done again only when that file or the script changes.
 ARG TAVERN_REPOSITORY=flizzywine/dsh-tavern
